@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sondaj — Animateur</title>
+<link rel="stylesheet" href="css/style.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+</head>
+<body>
+<header class="bandeau">
+  <div class="marque">SONDAJ <span>· Animateur</span></div>
+  <div class="conf" id="etat-auth"></div>
+</header>
+
+<main class="admin" id="app"></main>
+
+<script type="module">
+import {
+  login, logout, onAuth,
+  creerConference, creerQuestion, subscribeQuestions,
+  ouvrirQuestion, fermerQuestion, projeter, supprimerQuestion,
+  exporterCSV
+} from "./js/data-layer.js";
+
+const app = document.getElementById("app");
+let confId = new URLSearchParams(location.search).get("conf") || "";
+let questions = [];
+let stopQuestions = null;
+
+onAuth(user => {
+  document.getElementById("etat-auth").textContent = user ? user.email : "";
+  user ? ecranPilotage() : ecranLogin();
+});
+
+/* ---------- Connexion ---------- */
+function ecranLogin() {
+  app.innerHTML = `<div class="panneau" style="max-width:420px;margin:2rem auto">
+    <h2>Connexion animateur</h2>
+    <div class="grille-form">
+      <div class="plein"><label>Email</label><input type="email" id="email"></div>
+      <div class="plein"><label>Mot de passe</label><input type="password" id="mdp"></div>
+    </div>
+    <button class="btn" id="btn-login">Se connecter</button>
+    <p id="err" style="color:var(--corail);margin-top:.6rem"></p>
+  </div>`;
+  document.getElementById("btn-login").onclick = async () => {
+    try {
+      await login(document.getElementById("email").value, document.getElementById("mdp").value);
+    } catch (e) {
+      document.getElementById("err").textContent = "Identifiants incorrects.";
+    }
+  };
+}
+
+/* ---------- Pilotage ---------- */
+function ecranPilotage() {
+  app.innerHTML = `
+  <div class="panneau">
+    <h2>Conférence</h2>
+    <div class="grille-form">
+      <div><label>Code de la conférence</label>
+        <input type="text" id="conf-code" value="${confId}" placeholder="ex : sibato-2026-09"></div>
+      <div style="display:flex;align-items:flex-end;gap:.6rem">
+        <button class="mini-btn" id="btn-charger">Charger</button>
+        <button class="mini-btn" id="btn-creer-conf">Créer</button>
+        <button class="mini-btn" id="btn-logout">Déconnexion</button>
+      </div>
+    </div>
+    <div id="partage" style="margin-top:1rem"></div>
+  </div>
+  <div class="panneau" id="panneau-questions" hidden>
+    <h2>Questions <button class="mini-btn" id="btn-export" style="float:right">⬇ Export CSV</button></h2>
+    <div id="liste-q"></div>
+  </div>
+  <div class="panneau" id="panneau-nouvelle" hidden>
+    <h2>Nouvelle question</h2>
+    <div class="grille-form">
+      <div class="plein"><label>Texte de la question (*mot* = souligné or à la projection)</label>
+        <input type="text" id="q-texte"></div>
+      <div><label>Type</label>
+        <select id="q-type">
+          <option value="qcm">QCM</option>
+          <option value="ouverte">Question ouverte</option>
+          <option value="nuage">Nuage de mots</option>
+          <option value="curseur">Curseur prospectif</option>
+        </select></div>
+      <div><label>Ordre</label><input type="text" id="q-ordre" value="1"></div>
+      <div class="plein" id="zone-options"><label>Options QCM (une par ligne)</label>
+        <textarea id="q-options"></textarea></div>
+      <div id="zone-curseur" hidden><label>Étiquette gauche</label><input type="text" id="q-gauche" placeholder="Pas du tout confiant"></div>
+      <div id="zone-curseur2" hidden><label>Étiquette droite</label><input type="text" id="q-droite" placeholder="Très confiant"></div>
+      <div class="case"><input type="checkbox" id="q-anonyme" checked><label for="q-anonyme">Anonyme</label></div>
+      <div class="case"><input type="checkbox" id="q-multiple"><label for="q-multiple">Réponses multiples autorisées</label></div>
+    </div>
+    <button class="btn or" id="btn-ajouter" style="max-width:280px">Ajouter la question</button>
+  </div>`;
+
+  document.getElementById("btn-logout").onclick = () => logout();
+  document.getElementById("btn-charger").onclick = () => chargerConf(false);
+  document.getElementById("btn-creer-conf").onclick = () => chargerConf(true);
+  document.getElementById("btn-export").onclick = telechargerCSV;
+  document.getElementById("q-type").onchange = majFormType;
+  document.getElementById("btn-ajouter").onclick = ajouterQuestion;
+
+  if (confId) chargerConf(false);
+}
+
+function majFormType() {
+  const t = document.getElementById("q-type").value;
+  document.getElementById("zone-options").hidden = t !== "qcm";
+  document.getElementById("zone-curseur").hidden = t !== "curseur";
+  document.getElementById("zone-curseur2").hidden = t !== "curseur";
+}
+
+async function chargerConf(creer) {
+  const code = document.getElementById("conf-code").value.trim();
+  if (!code) return;
+  confId = code;
+  history.replaceState(null, "", "?conf=" + encodeURIComponent(confId));
+  if (creer) await creerConference(confId, confId);
+
+  document.getElementById("panneau-questions").hidden = false;
+  document.getElementById("panneau-nouvelle").hidden = false;
+  afficherPartage();
+
+  if (stopQuestions) stopQuestions();
+  stopQuestions = subscribeQuestions(confId, qs => { questions = qs; rendreListe(); });
+}
+
+function afficherPartage() {
+  const base = location.origin + location.pathname.replace(/animateur\.html$/, "");
+  const urlPart = base + "index.html?conf=" + encodeURIComponent(confId);
+  const urlProj = base + "projection.html?conf=" + encodeURIComponent(confId);
+  document.getElementById("partage").innerHTML = `<div class="liens-partage">
+    <div id="qrcode"></div>
+    <div>
+      <p><strong>Participants :</strong><br><code>${urlPart}</code></p>
+      <p style="margin-top:.5rem"><strong>Projection :</strong><br><code>${urlProj}</code>
+      <a class="mini-btn" href="${urlProj}" target="_blank" style="text-decoration:none">Ouvrir ↗</a></p>
+    </div>
+  </div>`;
+  new QRCode(document.getElementById("qrcode"), { text: urlPart, width: 130, height: 130 });
+}
+
+function rendreListe() {
+  const el = document.getElementById("liste-q");
+  if (!questions.length) {
+    el.innerHTML = `<p style="opacity:.6;font-style:italic">Aucune question pour l'instant — créez-en une ci-dessous.</p>`;
+    return;
+  }
+  el.innerHTML = questions.map(q => `
+    <div class="ligne-q">
+      <div class="txt"><strong>${q.ordre}.</strong> ${q.texte}
+        <small>${q.type}${q.anonyme ? " · anonyme" : " · avec prénom"}${q.multiple ? " · multiple" : ""}</small></div>
+      <span class="pastille ${q.statut}">${q.statut}</span>
+      ${q.projetee ? `<span class="pastille projetee">à l'écran</span>` : ""}
+      ${q.statut !== "ouverte"
+        ? `<button class="mini-btn" data-act="ouvrir" data-id="${q.id}">▶ Ouvrir</button>`
+        : `<button class="mini-btn" data-act="fermer" data-id="${q.id}">⏹ Fermer</button>`}
+      <button class="mini-btn" data-act="projeter" data-id="${q.id}">📺 Projeter</button>
+      <button class="mini-btn danger" data-act="suppr" data-id="${q.id}">✕</button>
+    </div>`).join("");
+
+  el.querySelectorAll("button").forEach(b => b.onclick = () => action(b.dataset.act, b.dataset.id));
+}
+
+async function action(act, id) {
+  if (act === "ouvrir") await ouvrirQuestion(confId, id, questions);
+  if (act === "fermer") await fermerQuestion(confId, id);
+  if (act === "projeter") await projeter(confId, id, questions);
+  if (act === "suppr" && confirm("Supprimer cette question et ses réponses ?"))
+    await supprimerQuestion(confId, id);
+}
+
+async function ajouterQuestion() {
+  const type = document.getElementById("q-type").value;
+  const q = {
+    texte: document.getElementById("q-texte").value.trim(),
+    type,
+    ordre: Number(document.getElementById("q-ordre").value) || 99,
+    anonyme: document.getElementById("q-anonyme").checked,
+    multiple: document.getElementById("q-multiple").checked
+  };
+  if (!q.texte) return;
+  if (type === "qcm") {
+    q.options = document.getElementById("q-options").value.split("\n").map(s => s.trim()).filter(Boolean);
+    if (q.options.length < 2) { alert("Au moins deux options."); return; }
+  }
+  if (type === "curseur") {
+    q.gauche = document.getElementById("q-gauche").value.trim();
+    q.droite = document.getElementById("q-droite").value.trim();
+  }
+  await creerQuestion(confId, q);
+  document.getElementById("q-texte").value = "";
+  document.getElementById("q-ordre").value = String((Number(document.getElementById("q-ordre").value) || 1) + 1);
+}
+
+async function telechargerCSV() {
+  const csv = await exporterCSV(confId);
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `sondaj_${confId}_bilan.csv`;
+  a.click();
+}
+</script>
+</body>
+</html>
