@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sondaj — Participez !</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="bandeau">
+  <div class="marque">SONDAJ <span>· CAP2030</span></div>
+  <div class="conf" id="nom-conf"></div>
+</header>
+
+<main class="ecran" id="app">
+  <div class="attente">
+    <div class="pulse-cercle"></div>
+    <h2>Connexion…</h2>
+  </div>
+</main>
+
+<script type="module">
+import {
+  subscribeQuestionOuverte, envoyerReponse,
+  getPrenom, setPrenom, aDejaRepondu, marquerRepondu
+} from "./js/data-layer.js";
+
+const params = new URLSearchParams(location.search);
+const confId = params.get("conf");
+const app = document.getElementById("app");
+
+const RGPD = `<p class="info-rgpd">Vos réponses servent uniquement à l'animation de cette
+conférence et à son bilan. Aucune donnée n'est transmise à des tiers.
+Données hébergées en Union européenne (Paris). Contact : CAP2030.</p>`;
+
+function ecranAttente(titre, sousTitre) {
+  app.innerHTML = `<div class="attente">
+    <div class="pulse-cercle"></div>
+    <h2>${titre}</h2>
+    <p>${sousTitre}</p>
+  </div>${RGPD}`;
+}
+
+if (!confId) {
+  app.innerHTML = `<div class="carte-question">
+    <h2>Rejoindre une conférence</h2>
+    <p style="margin-bottom:.8rem">Saisissez le code affiché à l'écran :</p>
+    <input type="text" id="code" placeholder="ex : sibato-2026-09" autocomplete="off">
+    <button class="btn" id="go">Rejoindre</button>
+  </div>`;
+  document.getElementById("go").onclick = () => {
+    const c = document.getElementById("code").value.trim();
+    if (c) location.search = "?conf=" + encodeURIComponent(c);
+  };
+} else {
+  document.getElementById("nom-conf").textContent = confId;
+  ecranAttente("Vous êtes connecté·e !", "La prochaine question apparaîtra ici automatiquement.");
+  subscribeQuestionOuverte(confId, afficherQuestion);
+}
+
+function afficherQuestion(q) {
+  if (!q) {
+    ecranAttente("En attente de la prochaine question…", "Gardez cette page ouverte 🌿");
+    return;
+  }
+  if (aDejaRepondu(q.id) && !q.multiple) {
+    ecranMerci(q, true);
+    return;
+  }
+
+  const types = { qcm: "Choix", ouverte: "Expression libre", nuage: "En quelques mots", curseur: "Positionnez-vous" };
+  let corps = "";
+
+  if (q.type === "qcm") {
+    corps = (q.options || []).map((o, i) =>
+      `<button class="opt" data-i="${i}">${o}</button>`).join("");
+    if (q.multiple) corps += `<button class="btn" id="valider" disabled>Valider mes choix</button>`;
+  } else if (q.type === "ouverte") {
+    corps = `<textarea id="texte" maxlength="280" placeholder="Votre réponse (280 caractères max)…"></textarea>
+             <button class="btn" id="valider">Envoyer</button>`;
+  } else if (q.type === "nuage") {
+    corps = `<input type="text" id="texte" maxlength="30" placeholder="Un mot ou deux…">
+             <button class="btn" id="valider">Envoyer</button>`;
+  } else if (q.type === "curseur") {
+    corps = `<div class="curseur-chiffre" id="val-curseur">50</div>
+             <input type="range" id="curseur" min="0" max="100" value="50">
+             <div class="curseur-valeurs"><span>${q.gauche || "Pas du tout"}</span><span>${q.droite || "Totalement"}</span></div>
+             <button class="btn" id="valider">Valider ma position</button>`;
+  }
+
+  const champPrenom = q.anonyme ? "" :
+    `<div class="champ-prenom"><label for="prenom">Votre prénom</label>
+     <input type="text" id="prenom" maxlength="30" value="${getPrenom()}" placeholder="Prénom"></div>`;
+
+  app.innerHTML = `<div class="carte-question">
+    <span class="etiquette-type">${types[q.type] || q.type}${q.anonyme ? " · anonyme" : ""}</span>
+    <h2>${q.texte}</h2>
+    ${champPrenom}${corps}
+  </div>${RGPD}`;
+
+  brancherEnvoi(q);
+}
+
+function brancherEnvoi(q) {
+  const choisis = new Set();
+
+  if (q.type === "qcm") {
+    app.querySelectorAll(".opt").forEach(btn => {
+      btn.onclick = () => {
+        const i = Number(btn.dataset.i);
+        if (q.multiple) {
+          btn.classList.toggle("choisi");
+          choisis.has(i) ? choisis.delete(i) : choisis.add(i);
+          document.getElementById("valider").disabled = choisis.size === 0;
+        } else {
+          btn.classList.add("choisi");
+          soumettre(q, q.options[i]);
+        }
+      };
+    });
+    if (q.multiple) {
+      document.getElementById("valider").onclick = () =>
+        soumettre(q, [...choisis].map(i => q.options[i]));
+    }
+  } else if (q.type === "ouverte" || q.type === "nuage") {
+    document.getElementById("valider").onclick = () => {
+      const t = document.getElementById("texte").value.trim();
+      if (t) soumettre(q, t);
+    };
+  } else if (q.type === "curseur") {
+    const slider = document.getElementById("curseur");
+    slider.oninput = () => document.getElementById("val-curseur").textContent = slider.value;
+    document.getElementById("valider").onclick = () => soumettre(q, Number(slider.value));
+  }
+}
+
+async function soumettre(q, valeur) {
+  const data = { valeur };
+  if (!q.anonyme) {
+    const p = (document.getElementById("prenom")?.value || "").trim();
+    if (p) { setPrenom(p); data.prenom = p; }
+  }
+  app.querySelectorAll("button").forEach(b => b.disabled = true);
+  try {
+    await envoyerReponse(confId, q.id, data);
+    if (!q.multiple) marquerRepondu(q.id);
+    ecranMerci(q, false);
+  } catch (e) {
+    alert("Petit souci de connexion — réessayez dans un instant.");
+    app.querySelectorAll("button").forEach(b => b.disabled = false);
+  }
+}
+
+function ecranMerci(q, deja) {
+  const encore = q.multiple
+    ? `<button class="btn secondaire" id="encore">Ajouter une autre réponse</button>` : "";
+  app.innerHTML = `<div class="merci">
+    <div class="coche">✓</div>
+    <h2>${deja ? "Réponse déjà enregistrée" : "Merci, c'est envoyé !"}</h2>
+    <p>Regardez l'écran de projection ✨</p>
+    ${encore}
+  </div>${RGPD}`;
+  const b = document.getElementById("encore");
+  if (b) b.onclick = () => afficherQuestion(q);
+}
+</script>
+</body>
+</html>
