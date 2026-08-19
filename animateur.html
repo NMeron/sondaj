@@ -18,7 +18,8 @@
 <script type="module">
 import {
   login, logout, onAuth,
-  creerConference, creerQuestion, subscribeQuestions,
+  creerConference, subscribeConferences, majConference,
+  creerQuestion, subscribeQuestions,
   ouvrirQuestion, fermerQuestion, projeter, supprimerQuestion,
   exporterCSV
 } from "./js/data-layer.js";
@@ -26,11 +27,26 @@ import {
 const app = document.getElementById("app");
 let confId = new URLSearchParams(location.search).get("conf") || "";
 let questions = [];
+let conferences = [];
 let stopQuestions = null;
+let stopConferences = null;
+let voirArchivees = false;
+let questionsCSV = [];   // questions validées, en attente d'import
+
+const STATUTS = {
+  avenir:   { libelle: "À venir",  classe: "attente" },
+  encours:  { libelle: "En cours", classe: "ouverte" },
+  terminee: { libelle: "Terminée", classe: "fermee" }
+};
 
 onAuth(user => {
   document.getElementById("etat-auth").textContent = user ? user.email : "";
-  user ? ecranPilotage() : ecranLogin();
+  if (user) {
+    ecranPilotage();
+  } else {
+    if (stopConferences) { stopConferences(); stopConferences = null; }
+    ecranLogin();
+  }
 });
 
 /* ---------- Connexion ---------- */
@@ -57,7 +73,13 @@ function ecranLogin() {
 function ecranPilotage() {
   app.innerHTML = `
   <div class="panneau">
-    <h2>Conférence</h2>
+    <h2>Mes conférences</h2>
+    <div id="liste-confs"><p style="opacity:.6;font-style:italic">Chargement…</p></div>
+    <p style="margin-top:.6rem"><a href="#" id="lien-archives" class="mont"
+       style="font-size:.82rem;color:var(--navy)"></a></p>
+  </div>
+  <div class="panneau">
+    <h2>Nouvelle conférence / accès direct</h2>
     <div class="grille-form">
       <div><label>Code de la conférence</label>
         <input type="text" id="conf-code" value="${confId}" placeholder="ex : sibato-2026-09"></div>
@@ -94,6 +116,23 @@ function ecranPilotage() {
       <div class="case"><input type="checkbox" id="q-multiple"><label for="q-multiple">Réponses multiples autorisées</label></div>
     </div>
     <button class="btn or" id="btn-ajouter" style="max-width:280px">Ajouter la question</button>
+  </div>
+  <div class="panneau" id="panneau-import" hidden>
+    <h2>Importer des questions (CSV)</h2>
+    <p style="font-size:.9rem;opacity:.75;margin-bottom:.7rem">
+      Fichier CSV avec séparateur point-virgule (;), encodage UTF-8 —
+      colonnes : <code>ordre;type;texte;anonyme;multiple;options;gauche;droite</code>.
+      Options QCM séparées par une barre verticale (|).
+      Voir le fichier modèle <strong>modele-questions.csv</strong>.
+    </p>
+    <div class="grille-form">
+      <div><input type="file" id="csv-fichier" accept=".csv,text/csv"></div>
+      <div style="display:flex;align-items:flex-end">
+        <button class="mini-btn" id="btn-analyser">Analyser le fichier</button>
+      </div>
+    </div>
+    <div id="csv-resultat" style="margin-top:.8rem"></div>
+    <button class="btn or" id="btn-importer" style="max-width:320px" hidden></button>
   </div>`;
 
   document.getElementById("btn-logout").onclick = () => logout();
@@ -102,10 +141,77 @@ function ecranPilotage() {
   document.getElementById("btn-export").onclick = telechargerCSV;
   document.getElementById("q-type").onchange = majFormType;
   document.getElementById("btn-ajouter").onclick = ajouterQuestion;
+  document.getElementById("btn-analyser").onclick = analyserCSV;
+  document.getElementById("btn-importer").onclick = importerCSV;
+  document.getElementById("lien-archives").onclick = (e) => {
+    e.preventDefault(); voirArchivees = !voirArchivees; rendreConferences();
+  };
+
+  if (!stopConferences) {
+    stopConferences = subscribeConferences(cs => { conferences = cs; rendreConferences(); });
+  } else {
+    rendreConferences();
+  }
 
   if (confId) chargerConf(false);
 }
 
+/* ---------- Liste "Mes conférences" ---------- */
+function rendreConferences() {
+  const el = document.getElementById("liste-confs");
+  const lien = document.getElementById("lien-archives");
+  if (!el) return;
+
+  const actives = conferences.filter(c => !c.archivee);
+  const archivees = conferences.filter(c => c.archivee);
+  const affichees = voirArchivees ? archivees : actives;
+
+  lien.textContent = voirArchivees
+    ? `← Retour aux conférences actives (${actives.length})`
+    : (archivees.length ? `Accès anciens sondages — archivés (${archivees.length})` : "");
+
+  if (!affichees.length) {
+    el.innerHTML = `<p style="opacity:.6;font-style:italic">${
+      voirArchivees ? "Aucune conférence archivée."
+      : "Aucune conférence active — créez-en une ci-dessous."}</p>`;
+    return;
+  }
+
+  el.innerHTML = affichees.map(c => {
+    const s = STATUTS[c.statut] || STATUTS.encours;
+    const date = c.creee && c.creee.toDate
+      ? c.creee.toDate().toLocaleDateString("fr-FR") : "";
+    return `<div class="ligne-q">
+      <div class="txt"><strong>${echap(c.nom || c.id)}</strong>
+        <small>code : ${echap(c.id)}${date ? " · créée le " + date : ""}</small></div>
+      <span class="pastille ${s.classe}">${s.libelle}</span>
+      ${c.id === confId ? `<span class="pastille projetee">chargée</span>` : ""}
+      <select data-statut="${c.id}" style="width:auto;padding:.35rem">
+        ${Object.entries(STATUTS).map(([k, v]) =>
+          `<option value="${k}" ${((c.statut || "encours") === k) ? "selected" : ""}>${v.libelle}</option>`).join("")}
+      </select>
+      <button class="mini-btn" data-act="ouvrir-conf" data-id="${c.id}">Ouvrir</button>
+      <button class="mini-btn" data-act="${c.archivee ? "restaurer" : "archiver"}" data-id="${c.id}">
+        ${c.archivee ? "Restaurer" : "Archiver"}</button>
+    </div>`;
+  }).join("");
+
+  el.querySelectorAll("button").forEach(b =>
+    b.onclick = () => actionConference(b.dataset.act, b.dataset.id));
+  el.querySelectorAll("select[data-statut]").forEach(s =>
+    s.onchange = () => majConference(s.dataset.statut, { statut: s.value }));
+}
+
+async function actionConference(act, id) {
+  if (act === "ouvrir-conf") {
+    document.getElementById("conf-code").value = id;
+    chargerConf(false);
+  }
+  if (act === "archiver") await majConference(id, { archivee: true });
+  if (act === "restaurer") await majConference(id, { archivee: false });
+}
+
+/* ---------- Chargement d'une conférence ---------- */
 function majFormType() {
   const t = document.getElementById("q-type").value;
   document.getElementById("zone-options").hidden = t !== "qcm";
@@ -122,7 +228,9 @@ async function chargerConf(creer) {
 
   document.getElementById("panneau-questions").hidden = false;
   document.getElementById("panneau-nouvelle").hidden = false;
+  document.getElementById("panneau-import").hidden = false;
   afficherPartage();
+  rendreConferences();
 
   if (stopQuestions) stopQuestions();
   stopQuestions = subscribeQuestions(confId, qs => { questions = qs; rendreListe(); });
@@ -140,18 +248,20 @@ function afficherPartage() {
       <a class="mini-btn" href="${urlProj}" target="_blank" style="text-decoration:none">Ouvrir ↗</a></p>
     </div>
   </div>`;
+  document.getElementById("qrcode").innerHTML = "";
   new QRCode(document.getElementById("qrcode"), { text: urlPart, width: 130, height: 130 });
 }
 
+/* ---------- Liste des questions ---------- */
 function rendreListe() {
   const el = document.getElementById("liste-q");
   if (!questions.length) {
-    el.innerHTML = `<p style="opacity:.6;font-style:italic">Aucune question pour l'instant — créez-en une ci-dessous.</p>`;
+    el.innerHTML = `<p style="opacity:.6;font-style:italic">Aucune question pour l'instant — créez-en une ci-dessous ou importez un CSV.</p>`;
     return;
   }
   el.innerHTML = questions.map(q => `
     <div class="ligne-q">
-      <div class="txt"><strong>${q.ordre}.</strong> ${q.texte}
+      <div class="txt"><strong>${q.ordre}.</strong> ${echap(q.texte)}
         <small>${q.type}${q.anonyme ? " · anonyme" : " · avec prénom"}${q.multiple ? " · multiple" : ""}</small></div>
       <span class="pastille ${q.statut}">${q.statut}</span>
       ${q.projetee ? `<span class="pastille projetee">à l'écran</span>` : ""}
@@ -196,6 +306,147 @@ async function ajouterQuestion() {
   document.getElementById("q-ordre").value = String((Number(document.getElementById("q-ordre").value) || 1) + 1);
 }
 
+/* ---------- Import CSV de questions ---------- */
+
+/** Parseur CSV minimal mais robuste : séparateur ; , guillemets,
+    guillemets doublés, BOM, fins de ligne Windows/Mac/Linux. */
+function parserCSV(texte) {
+  texte = texte.replace(/^\uFEFF/, "");
+  const lignes = [];
+  let ligne = [], champ = "", entreGuillemets = false;
+  for (let i = 0; i < texte.length; i++) {
+    const c = texte[i];
+    if (entreGuillemets) {
+      if (c === '"') {
+        if (texte[i + 1] === '"') { champ += '"'; i++; }
+        else entreGuillemets = false;
+      } else champ += c;
+    } else if (c === '"') {
+      entreGuillemets = true;
+    } else if (c === ';') {
+      ligne.push(champ); champ = "";
+    } else if (c === '\n' || c === '\r') {
+      if (c === '\r' && texte[i + 1] === '\n') i++;
+      ligne.push(champ); champ = "";
+      if (ligne.some(v => v.trim() !== "")) lignes.push(ligne);
+      ligne = [];
+    } else champ += c;
+  }
+  if (champ !== "" || ligne.length) {
+    ligne.push(champ);
+    if (ligne.some(v => v.trim() !== "")) lignes.push(ligne);
+  }
+  return lignes;
+}
+
+const ouiNon = v => ["oui", "o", "yes", "1", "vrai", "true"].includes(String(v).trim().toLowerCase());
+
+function analyserCSV() {
+  const input = document.getElementById("csv-fichier");
+  const resultat = document.getElementById("csv-resultat");
+  const btn = document.getElementById("btn-importer");
+  questionsCSV = [];
+  btn.hidden = true;
+
+  if (!input.files.length) {
+    resultat.innerHTML = `<p style="color:var(--corail)">Choisissez d'abord un fichier CSV.</p>`;
+    return;
+  }
+  const lecteur = new FileReader();
+  lecteur.onload = () => {
+    const lignes = parserCSV(lecteur.result);
+    if (lignes.length < 2) {
+      resultat.innerHTML = `<p style="color:var(--corail)">Fichier vide ou sans ligne de données (l'en-tête seul ne suffit pas).</p>`;
+      return;
+    }
+    // Repérage des colonnes par leur nom d'en-tête (ordre libre)
+    const entete = lignes[0].map(s => s.trim().toLowerCase());
+    const col = nom => entete.indexOf(nom);
+    const iOrdre = col("ordre"), iType = col("type"), iTexte = col("texte"),
+          iAnonyme = col("anonyme"), iMultiple = col("multiple"),
+          iOptions = col("options"), iGauche = col("gauche"), iDroite = col("droite");
+
+    const erreurs = [];
+    if (iType < 0 || iTexte < 0) {
+      resultat.innerHTML = `<p style="color:var(--corail)">En-tête invalide : les colonnes « type » et « texte » sont obligatoires.
+        En-tête attendu : <code>ordre;type;texte;anonyme;multiple;options;gauche;droite</code></p>`;
+      return;
+    }
+
+    const TYPES = ["qcm", "ouverte", "nuage", "curseur"];
+    lignes.slice(1).forEach((l, n) => {
+      const numLigne = n + 2; // ligne réelle dans le fichier
+      const v = i => (i >= 0 && i < l.length ? String(l[i]).trim() : "");
+      const type = v(iType).toLowerCase();
+      const texte = v(iTexte);
+      if (!TYPES.includes(type)) {
+        erreurs.push(`Ligne ${numLigne} : type « ${echap(v(iType))} » inconnu (attendu : qcm, ouverte, nuage ou curseur).`);
+        return;
+      }
+      if (!texte) { erreurs.push(`Ligne ${numLigne} : texte de question vide.`); return; }
+
+      const q = {
+        texte, type,
+        ordre: Number(v(iOrdre)) || (n + 1),
+        anonyme: iAnonyme >= 0 ? ouiNon(v(iAnonyme)) : true,
+        multiple: iMultiple >= 0 ? ouiNon(v(iMultiple)) : false
+      };
+      if (type === "qcm") {
+        q.options = v(iOptions).split("|").map(s => s.trim()).filter(Boolean);
+        if (q.options.length < 2) {
+          erreurs.push(`Ligne ${numLigne} : un QCM demande au moins 2 options séparées par | .`);
+          return;
+        }
+      }
+      if (type === "curseur") {
+        q.gauche = v(iGauche); q.droite = v(iDroite);
+      }
+      questionsCSV.push(q);
+    });
+
+    let html = "";
+    if (erreurs.length) {
+      html += `<p style="color:var(--corail)"><strong>${erreurs.length} erreur(s) :</strong></p>
+        <ul style="color:var(--corail);font-size:.88rem;margin-left:1.2rem">` +
+        erreurs.map(e => `<li>${e}</li>`).join("") + `</ul>`;
+    }
+    if (questionsCSV.length) {
+      html += `<p style="color:var(--vert)"><strong>${questionsCSV.length} question(s) prête(s) à importer</strong> :</p>
+        <ul style="font-size:.88rem;margin-left:1.2rem">` +
+        questionsCSV.map(q => `<li>${q.ordre}. [${q.type}] ${echap(q.texte)}</li>`).join("") + `</ul>`;
+      btn.textContent = `Importer ${questionsCSV.length} question(s)`;
+      btn.hidden = false;
+    } else if (!erreurs.length) {
+      html = `<p style="color:var(--corail)">Aucune question exploitable dans ce fichier.</p>`;
+    }
+    resultat.innerHTML = html;
+  };
+  lecteur.readAsText(input.files[0], "UTF-8");
+}
+
+async function importerCSV() {
+  const btn = document.getElementById("btn-importer");
+  const resultat = document.getElementById("csv-resultat");
+  btn.disabled = true;
+  let faites = 0;
+  try {
+    for (const q of questionsCSV) {   // séquentiel : préserve l'ordre
+      await creerQuestion(confId, q);
+      faites++;
+      btn.textContent = `Import en cours… ${faites}/${questionsCSV.length}`;
+    }
+    resultat.innerHTML = `<p style="color:var(--vert)"><strong>✓ ${faites} question(s) importée(s).</strong></p>`;
+    btn.hidden = true;
+    document.getElementById("csv-fichier").value = "";
+  } catch (e) {
+    resultat.innerHTML = `<p style="color:var(--corail)">Import interrompu après ${faites} question(s) — vérifiez la connexion et réessayez (les questions déjà importées sont conservées).</p>`;
+  } finally {
+    btn.disabled = false;
+    questionsCSV = [];
+  }
+}
+
+/* ---------- Export CSV des réponses ---------- */
 async function telechargerCSV() {
   const csv = await exporterCSV(confId);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
@@ -203,6 +454,12 @@ async function telechargerCSV() {
   a.href = URL.createObjectURL(blob);
   a.download = `sondaj_${confId}_bilan.csv`;
   a.click();
+}
+
+function echap(s) {
+  const d = document.createElement("div");
+  d.textContent = String(s);
+  return d.innerHTML;
 }
 </script>
 </body>

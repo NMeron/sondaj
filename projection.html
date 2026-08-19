@@ -97,20 +97,44 @@ function rendreBarres(zone, q, reps) {
   });
 }
 
-/* ---------- Ouvertes : mur de post-its ---------- */
+/* ---------- Ouvertes : mur de post-its organique ---------- */
+
+/** Petit hachage déterministe : un même identifiant donne toujours
+    le même nombre — la rotation d'un post-it ne change donc jamais,
+    même quand le mur est redessiné. */
+function hacher(chaine) {
+  let h = 0;
+  for (let i = 0; i < chaine.length; i++) {
+    h = (h * 31 + chaine.charCodeAt(i)) >>> 0;
+  }
+  return h;
+}
+
 function rendreMur(zone, reps) {
-  if (!zone.querySelector(".mur")) zone.innerHTML = `<div class="mur"></div>`;
-  const mur = zone.querySelector(".mur");
-  const dejaAffiches = new Set([...mur.children].map(c => c.dataset.id));
+  if (!zone.querySelector(".mur")) {
+    const nbCols = Math.max(2, Math.min(5, Math.floor(zone.clientWidth / 340)));
+    zone.innerHTML = `<div class="mur">` +
+      Array.from({ length: nbCols }, () => `<div class="mur-col"></div>`).join("") +
+      `</div>`;
+  }
+  const cols = [...zone.querySelectorAll(".mur-col")];
+  const dejaAffiches = new Set(
+    [...zone.querySelectorAll(".postit")].map(c => c.dataset.id)
+  );
 
   reps.forEach(r => {
     if (dejaAffiches.has(r.id)) return;
+    const h = hacher(r.id);
     const p = document.createElement("div");
-    p.className = "postit";
+    // rotation persistante entre -3,5° et +3,5°, teinte stable, dérivées de l'id
+    p.className = "postit teinte-" + (h % 4);
+    p.style.setProperty("--rot", (((h % 71) / 10) - 3.5).toFixed(1) + "deg");
     p.dataset.id = r.id;
     p.innerHTML = `${echap(String(r.valeur))}${r.prenom ? `<span class="auteur">— ${echap(r.prenom)}</span>` : ""}`;
     p.onclick = () => mettreEnVedette(zone, p);
-    mur.appendChild(p);
+    // façon main humaine : le post-it rejoint la colonne la moins remplie
+    const colCourte = cols.reduce((a, b) => (b.offsetHeight < a.offsetHeight ? b : a), cols[0]);
+    colCourte.appendChild(p);
   });
 }
 
