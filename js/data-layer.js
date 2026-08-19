@@ -134,8 +134,23 @@ export function onAuth(callback) { return onAuthStateChanged(auth, callback); }
 
 export async function creerConference(confId, nom) {
   await setDoc(doc(db, "conferences", confId), {
-    nom, creee: serverTimestamp()
+    nom, creee: serverTimestamp(),
+    statut: "avenir",      // avenir | encours | terminee
+    archivee: false
   });
+}
+
+/** Liste temps réel de toutes les conférences (page animateur). */
+export function subscribeConferences(callback) {
+  const q = query(collection(db, "conferences"), orderBy("creee", "desc"));
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+  });
+}
+
+/** Met à jour une conférence (statut, archivage, nom...). */
+export async function majConference(confId, champs) {
+  await updateDoc(doc(db, "conferences", confId), champs);
 }
 
 export async function creerQuestion(confId, q) {
