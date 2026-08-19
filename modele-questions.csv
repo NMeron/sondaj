@@ -1,0 +1,6 @@
+﻿ordre;type;texte;anonyme;multiple;options;gauche;droite
+1;qcm;Quelle est votre commune de résidence ?;oui;non;Saint-François|Sainte-Anne|Le Gosier|Autre;;
+2;nuage;La Guadeloupe de demain, en un mot ?;oui;non;;;
+3;ouverte;Un souvenir marquant lié à la biodiversité ?;non;non;;;
+4;curseur;Confiant·e pour la Guadeloupe de 2040 ?;oui;non;;Pas confiant;Très confiant
+5;qcm;Quels thèmes vous intéressent le plus ? (plusieurs choix possibles);oui;oui;Eau|Énergie|Alimentation|Habitat|Transmission;;
