@@ -199,32 +199,43 @@ body.projection {
 @keyframes pouls { 0% { transform: scale(1); } 40% { transform: scale(1.045); } 100% { transform: scale(1); } }
 .pouls { animation: pouls .45s ease; }
 
-/* Mur de post-its (questions ouvertes) */
-.mur { display: flex; flex-wrap: wrap; gap: 1rem; align-content: flex-start; overflow: hidden; height: 100%; }
+/* Mur de post-its (questions ouvertes) — disposition organique en colonnes */
+.mur {
+  display: flex; gap: 1.1rem; align-items: flex-start;
+  overflow: hidden; height: 100%;
+}
+.mur-col {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; gap: 1.1rem;
+}
 .postit {
+  --rot: 0deg;
   background: #fff; color: var(--encre); border-radius: 4px 14px 14px 14px;
-  padding: .9rem 1.1rem; max-width: 340px;
+  padding: .9rem 1.1rem;
   box-shadow: 0 6px 16px rgba(0,0,0,.35);
   font-size: clamp(.9rem, 1.5vw, 1.15rem); line-height: 1.4;
   border-top: 5px solid var(--or);
-  animation: postitPose .5s cubic-bezier(.2,.9,.3,1.2);
+  transform: rotate(var(--rot));
+  animation: postitPose .55s cubic-bezier(.2,.9,.3,1.2);
   cursor: pointer;
 }
-.postit:nth-child(3n+1) { border-top-color: var(--lagon); }
-.postit:nth-child(3n+2) { border-top-color: var(--vert); }
+.postit.teinte-1 { border-top-color: var(--lagon); }
+.postit.teinte-2 { border-top-color: var(--vert); }
+.postit.teinte-3 { border-top-color: var(--corail); }
 .postit .auteur {
   display: block; font-family: 'Montserrat', sans-serif;
   font-size: .7rem; font-weight: 700; color: var(--navy);
   text-transform: uppercase; letter-spacing: .06em; margin-top: .5rem;
 }
 @keyframes postitPose {
-  from { opacity: 0; transform: translateY(20px) rotate(-2deg); }
-  to   { opacity: 1; transform: none; }
+  from { opacity: 0; transform: translateY(24px) rotate(calc(var(--rot) - 4deg)) scale(.96); }
+  to   { opacity: 1; transform: rotate(var(--rot)); }
 }
 .postit.vedette {
   position: absolute; inset: 0; margin: auto; max-width: 62%;
   height: fit-content; font-size: clamp(1.4rem, 2.8vw, 2.2rem);
   z-index: 5; box-shadow: 0 20px 60px rgba(0,0,0,.6);
+  transform: rotate(0deg); animation: none;
 }
 .voile { position: absolute; inset: 0; background: rgba(13,27,64,.75); z-index: 4; }
 
